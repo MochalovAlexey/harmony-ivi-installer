@@ -104,6 +104,16 @@ The reference implementation of all of this is
 [`../ivi-installer/ivi_installer/strategies.py`](../ivi-installer/ivi_installer/strategies.py)
 (the full local cascade) and `installer.py` (the public entry point).
 
+## Prerequisite: ADB must already be enabled
+
+This whole flow begins at step 1 (`adb devices`) and assumes the head unit
+**already exposes a working ADB connection**. Getting the car into a
+dealer-unlocked / ADB-enabled state is a **separate step done at a service
+center** with dealer tooling over the diagnostic bus. This project does not
+enable ADB, ships no credentials to do so, and cannot turn it on for you. If
+`adb devices` does not already list the car, stop here and get the unit
+ADB-enabled at a workshop first - nothing below will work without it.
+
 ## Ground rules
 
 - **Read-only by default.** Probe before you mutate. Everything in step 1-3 is

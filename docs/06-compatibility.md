@@ -65,13 +65,18 @@ swallowed. Use the reflection helper:
 
 ## `adb` can't see the car / "unauthorized"
 
-- The head unit must be in a **dealer-unlocked / ADB-enabled** state. On some
-  Deepal models USB shares the CarPlay and ADB paths - you may need to toggle
-  `usb.carplay.state`.
-- If an OTA killed the USB ADB socket entirely, the only way back in is the
+- The head unit must already be in a **dealer-unlocked / ADB-enabled** state.
+  **This repo does not enable ADB** - that is a service-level operation done at
+  a workshop with dealer tooling over the diagnostic bus. If `adb devices` does
+  not list the car, this is your blocker: get the unit ADB-enabled first; none
+  of the install tooling applies until then.
+- On some Deepal models USB shares the CarPlay and ADB paths once unlocked - you
+  may need to toggle `usb.carplay.state`.
+- If an OTA killed an already-enabled USB ADB socket, the way back in is the
   DoIP/UDS diagnostic bus - that path needs manufacturer credentials that are
   **redacted** from this public release (see
-  [`../ivi-installer/ivi_installer/diag.py`](../ivi-installer/ivi_installer/diag.py)).
+  [`../ivi-installer/ivi_installer/diag.py`](../ivi-installer/ivi_installer/diag.py)),
+  so it is not a self-serve unlock either.
 - Don't bother with `adb root` (`adbd cannot run as root in production builds`)
   or `su` - neither exists. The whole method is non-root by design.
 

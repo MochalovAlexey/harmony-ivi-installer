@@ -13,6 +13,15 @@ desktop tool that does it.
 > research and for vehicles you own or are authorized to service. It requires
 > physical USB access and a dealer-unlocked ADB - nothing here works remotely.
 
+> ❗ **Prerequisite this repo does NOT cover: enabling the ADB port.** Everything
+> here starts *after* the head unit already exposes a working ADB connection.
+> Putting the car into a dealer-unlocked / ADB-enabled state is a separate step
+> that has to be done at a service center (dealer tooling over the diagnostic
+> bus). This project does not unlock ADB, does not ship the credentials to do
+> so, and cannot turn it on for you. If `adb devices` does not already see the
+> car, none of the tooling below applies - get the unit ADB-enabled at a
+> workshop first.
+
 ---
 
 ## What's in here
