@@ -92,6 +92,19 @@ See [`ivi-installer/README.md`](ivi-installer/README.md) for build + scripting.
 - **Large/copyrighted binaries excluded** (a bundled keyboard APK, Google's
   `platform-tools`) - documented as optional drop-ins.
 
+## Acknowledgements
+
+Our deepest, most sincere gratitude to the anonymous author(s) of the
+`Codex` / `XCodesHuaweiPwner` tool - whose `AvatrHdbBroker` we found *still
+running* on a head unit, long after they'd packed up and gone home. Thank you
+for leaving the `app_process` daemon alive, for the lovingly named
+`codex-session-approval-` threads, and for doing the hard reflection work so we
+didn't have to. We reverse-engineered it, documented every byte, and published
+the whole thing. You shouldn't have. Really - you shouldn't have.
+
+*(If that's your handle reading this: open a PR and we'll credit you by name.
+We looked; you cover your tracks better than your broker does.)*
+
 ## License
 
 No open-source license is granted. See [`DISCLAIMER.md`](DISCLAIMER.md) - this
