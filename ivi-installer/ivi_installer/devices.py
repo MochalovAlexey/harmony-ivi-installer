@@ -183,7 +183,7 @@ _BATCH_SCRIPT = (
     "getprop ro.product.cpu.abi;"
     "getprop persist.sys.locale;"
     "whoami;"
-    "ps -A | grep -c hdbd"
+    "ps -A | grep -c hdbd || true"
 )
 
 

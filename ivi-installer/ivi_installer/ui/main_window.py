@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, available_timezones
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -256,8 +256,14 @@ def _section_label(text: str) -> QLabel:
 # =========================================================================
 
 class MainWindow(QMainWindow):
+    _gui_callback_requested = Signal(object)
+
     def __init__(self) -> None:
         super().__init__()
+        self._gui_callback_requested.connect(
+            self._run_on_gui_thread,
+            Qt.QueuedConnection,
+        )
         # Native OS chrome carries the title + version — no in-window
         # title strip; that would just duplicate the system frame.
         self.setWindowTitle(f"IVI Installer v{__version__}")
@@ -1300,7 +1306,8 @@ class MainWindow(QMainWindow):
         worker.log_line.connect(self._log_full)
         worker.result.connect(self._on_catalog_fetch_result)
         worker.error.connect(self._on_catalog_fetch_error)
-        worker.finished.connect(self._on_catalog_fetch_finished)
+        worker.finished.connect(
+            lambda: self._queue_on_gui_thread(self._on_catalog_fetch_finished))
         thread = workers.run_in_thread(worker)
         self._catalog_thread = thread
         self._catalog_worker = worker
@@ -1366,9 +1373,8 @@ class MainWindow(QMainWindow):
         worker = self._catalog_worker
         self._catalog_thread = None
         self._catalog_worker = None
-        if thread is not None:
-            thread.quit()
-            thread.wait(2000)
+        if thread is not None and worker is not None:
+            self._drop_refs(thread, worker)
 
     def _on_store_install(self, entry) -> None:
         # Verbose breadcrumb up front — gives us the click → busy →
@@ -1423,13 +1429,12 @@ class MainWindow(QMainWindow):
         # AFTER ``run_in_thread`` returned — fast-failing workers then
         # left ``_busy`` stuck on True forever, and every subsequent
         # click toasted "wait for the current operation".
-        from PySide6.QtCore import QThread
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(thread.quit)
         worker.finished.connect(
-            lambda t=thread, w=worker: self._on_op_finished(t, w))
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         thread.start()
         self._active_thread = thread
         self._active_worker = worker
@@ -1465,7 +1470,8 @@ class MainWindow(QMainWindow):
         worker.result.connect(self._on_hot_keywords_result)
         worker.error.connect(lambda msg: self._log_full(
             f"store: hot keywords fetch failed: {msg}"))
-        worker.finished.connect(self._on_hot_keywords_finished)
+        worker.finished.connect(
+            lambda: self._queue_on_gui_thread(self._on_hot_keywords_finished))
         thread = workers.run_in_thread(worker)
         self._hot_keywords_thread = thread
         self._hot_keywords_worker = worker
@@ -1478,11 +1484,8 @@ class MainWindow(QMainWindow):
         worker = self._hot_keywords_worker
         self._hot_keywords_thread = None
         self._hot_keywords_worker = None
-        if thread is not None:
-            thread.quit()
-            thread.wait(2000)
-        if worker is not None:
-            worker.deleteLater()
+        if thread is not None and worker is not None:
+            self._drop_refs(thread, worker)
 
     def _on_store_search_suggestions_requested(self, keyword: str) -> None:
         # Don't try to cancel an in-flight worker — the QThread can't
@@ -1501,7 +1504,8 @@ class MainWindow(QMainWindow):
         # finished signal arrives on the main thread; only then is
         # it safe to drop the QThread.
         worker.finished.connect(
-            lambda _e=entry: self._on_search_suggest_finished(_e))
+            lambda _e=entry: self._queue_on_gui_thread(
+                lambda e=_e: self._on_search_suggest_finished(e)))
 
     def _on_search_suggest_result(
         self, keyword: str, suggestions: list, top_app,
@@ -1516,11 +1520,8 @@ class MainWindow(QMainWindow):
             self._search_suggest_inflight.remove(entry)
         except ValueError:
             pass
-        if thread is not None:
-            thread.quit()
-            thread.wait(2000)
-        if worker is not None:
-            worker.deleteLater()
+        if thread is not None and worker is not None:
+            self._drop_refs(thread, worker)
 
     def _on_store_suggested_app_install(self, item: dict) -> None:
         """Build a synthetic CatalogEntry from a ``completeSearchWord``
@@ -1952,10 +1953,16 @@ class MainWindow(QMainWindow):
         worker.result.connect(self._on_diag_discover_result)
         worker.error.connect(self._on_diag_discover_error)
         worker.log_line.connect(self._log_full)
-        worker.finished.connect(
-            lambda: self.diag_discover_button.setEnabled(True))
         self._active_worker = worker
-        self._active_thread = workers.run_in_thread(worker)
+        thread = workers.run_in_thread(worker)
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._drop_refs_later(
+                t,
+                w,
+                before=lambda: self.diag_discover_button.setEnabled(True),
+            )
+        )
+        self._active_thread = thread
 
     def _on_diag_discover_result(self, gws: list) -> None:
         if not gws:
@@ -2009,7 +2016,8 @@ class MainWindow(QMainWindow):
         worker.log_line.connect(self._log_full)
         worker.result.connect(self._on_enable_adb_result)
         worker.error.connect(self._on_enable_adb_error)
-        worker.finished.connect(self._on_enable_adb_finished)
+        worker.finished.connect(
+            lambda: self._queue_on_gui_thread(self._on_enable_adb_finished))
         self._active_worker = worker
         self._active_thread = workers.run_in_thread(worker)
 
@@ -2042,10 +2050,14 @@ class MainWindow(QMainWindow):
         self._toast("Enable ADB crashed.", kind="error")
 
     def _on_enable_adb_finished(self) -> None:
+        thread = self._active_thread
+        worker = self._active_worker
         self._busy = False
         self.diag_enable_button.setEnabled(True)
         self.diag_disable_button.setEnabled(True)
         self.diag_discover_button.setEnabled(True)
+        if thread is not None and worker is not None:
+            self._drop_refs(thread, worker)
 
     # =====================================================================
     # AppGallery (hidden surface; reachable via Cmd/Ctrl+Shift+D).
@@ -2097,7 +2109,8 @@ class MainWindow(QMainWindow):
         worker.result.connect(self._on_appgallery_result)
         worker.error.connect(self._on_appgallery_error)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2184,7 +2197,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_celia_install_error)
         worker.result.connect(self._on_celia_install_result)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2224,7 +2238,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_celia_install_error)
         worker.result.connect(self._on_celia_enroll_result)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2290,8 +2305,12 @@ class MainWindow(QMainWindow):
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
         worker.finished.connect(
-            lambda: (self.grant_pkg_refresh.setEnabled(True),
-                      self._drop_refs(thread, worker)))
+            lambda t=thread, w=worker: self._drop_refs_later(
+                t,
+                w,
+                before=lambda: self.grant_pkg_refresh.setEnabled(True),
+            )
+        )
 
     def _on_pkg_list(self, serial, packages) -> None:
         if serial != self._selected_serial:
@@ -2330,7 +2349,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_grant_error)
         worker.result.connect(self._on_grant_result)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2375,8 +2395,12 @@ class MainWindow(QMainWindow):
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
         worker.finished.connect(
-            lambda: (self._update_install_button(),
-                      self._drop_refs(thread, worker)))
+            lambda t=thread, w=worker: self._drop_refs_later(
+                t,
+                w,
+                before=self._update_install_button,
+            )
+        )
 
     def _on_bypass_status(self, serial, status) -> None:
         if serial != self._selected_serial:
@@ -2408,7 +2432,8 @@ class MainWindow(QMainWindow):
         worker.result.connect(self._on_bypass_redeploy_result)
         worker.error.connect(self._on_bypass_error)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2779,7 +2804,8 @@ class MainWindow(QMainWindow):
         worker.result.connect(self._on_install_result)
         worker.stage.connect(self._on_install_stage)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -2925,7 +2951,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_worker_error)
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
-        worker.finished.connect(lambda: self._drop_refs(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._drop_refs_later(t, w))
 
     def _on_screen_categories_loaded(
         self, serial: str, users: list, displays: list,
@@ -2948,7 +2975,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_worker_error)
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
-        worker.finished.connect(lambda: self._drop_refs(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._drop_refs_later(t, w))
 
     def _on_tz_read(self, serial, tz) -> None:
         if serial != self._selected_serial:
@@ -2993,7 +3021,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_tz_write_error)
         worker.result.connect(self._on_tz_write_result)
         thread = workers.run_in_thread(worker)
-        worker.finished.connect(lambda: self._on_op_finished(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._finish_op_later(t, w))
         self._active_thread = thread
         self._active_worker = worker
 
@@ -3037,8 +3066,11 @@ class MainWindow(QMainWindow):
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
         worker.finished.connect(
-            lambda: (self.info_refresh_button.setEnabled(True),
-                      self._drop_refs(thread, worker))
+            lambda t=thread, w=worker: self._drop_refs_later(
+                t,
+                w,
+                before=lambda: self.info_refresh_button.setEnabled(True),
+            )
         )
 
     def _on_device_info_read(self, serial, sections) -> None:
@@ -3059,6 +3091,31 @@ class MainWindow(QMainWindow):
     # =====================================================================
     # Shared op lifecycle
     # =====================================================================
+
+    def _queue_on_gui_thread(self, callback) -> None:
+        self._gui_callback_requested.emit(callback)
+
+    @Slot(object)
+    def _run_on_gui_thread(self, callback) -> None:
+        try:
+            callback()
+        except RuntimeError:
+            # The window may be closing while a background worker posts its
+            # final callback. Qt already owns teardown at that point.
+            log.debug("dropping stale queued GUI callback", exc_info=True)
+
+    def _finish_op_later(self, thread, worker) -> None:
+        self._queue_on_gui_thread(
+            lambda t=thread, w=worker: self._on_op_finished(t, w)
+        )
+
+    def _drop_refs_later(self, thread, worker, before=None) -> None:
+        def _finish(t=thread, w=worker, cb=before) -> None:
+            if cb is not None:
+                cb()
+            self._drop_refs(t, w)
+
+        self._queue_on_gui_thread(_finish)
 
     def _on_op_finished(self, thread, worker) -> None:
         self._set_busy(False)
@@ -3103,7 +3160,8 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_worker_error)
         thread = workers.run_in_thread(worker)
         self._inflight.append((thread, worker))
-        worker.finished.connect(lambda: self._drop_refs(thread, worker))
+        worker.finished.connect(
+            lambda t=thread, w=worker: self._drop_refs_later(t, w))
 
     # =====================================================================
     # Generic
@@ -3113,7 +3171,18 @@ class MainWindow(QMainWindow):
         self._log_full(f"⚠ {msg}")
 
     def _drop_refs(self, thread, worker) -> None:
-        thread.wait(2000)
+        if QThread.currentThread() is thread:
+            self._drop_refs_later(thread, worker)
+            return
+        if thread.isRunning():
+            thread.quit()
+            if not thread.wait(2000):
+                log.warning("worker thread did not stop; deferring cleanup")
+                QTimer.singleShot(
+                    100,
+                    lambda t=thread, w=worker: self._drop_refs(t, w),
+                )
+                return
         worker.deleteLater()
         thread.deleteLater()
         if self._active_thread is thread:
