@@ -70,7 +70,8 @@ project_name = "IVI Installer"
 bundle = "dev.deepal2"
 version = "0.25.0"
 url = "https://github.com/vladislavRzhevicky/harmony-ivi-installer"
-license.text = "Research and authorized use only — no warranty. See ../DISCLAIMER.md"
+license = "LicenseRef-ResearchAuthorizedUseOnly"
+license-files = ["LICENSE.md"]
 author = "cars-research contributors"
 author_email = "noreply@example.com"
 
